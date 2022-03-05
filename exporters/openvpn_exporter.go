@@ -1,16 +1,7 @@
 package exporters
 
 import (
-	"bufio"
-	"bytes"
-	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
-	"io"
-	"log"
-	"os"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type OpenvpnServerHeader struct {
@@ -33,7 +24,8 @@ type OpenVPNExporter struct {
 	openvpnServerHeaders        map[string]OpenvpnServerHeader
 }
 
-func NewOpenVPNExporter(statusPaths []string, ignoreIndividuals bool) (*OpenVPNExporter, error) {
+/*
+func NewOpenVPNExporter(statusPaths []string) (*OpenVPNExporter, error) {
 	// Metrics exported both for client and server statistics.
 	openvpnUpDesc := prometheus.NewDesc(
 		prometheus.BuildFQName("openvpn", "", "up"),
@@ -90,21 +82,10 @@ func NewOpenVPNExporter(statusPaths []string, ignoreIndividuals bool) (*OpenVPNE
 			[]string{"status_path"}, nil),
 	}
 
-	var serverHeaderClientLabels []string
-	var serverHeaderClientLabelColumns []string
-	var serverHeaderRoutingLabels []string
-	var serverHeaderRoutingLabelColumns []string
-	if ignoreIndividuals {
-		serverHeaderClientLabels = []string{"status_path", "common_name"}
-		serverHeaderClientLabelColumns = []string{"Common Name"}
-		serverHeaderRoutingLabels = []string{"status_path", "common_name"}
-		serverHeaderRoutingLabelColumns = []string{"Common Name"}
-	} else {
-		serverHeaderClientLabels = []string{"status_path", "common_name", "connection_time", "real_address", "virtual_address", "username"}
-		serverHeaderClientLabelColumns = []string{"Common Name", "Connected Since (time_t)", "Real Address", "Virtual Address", "Username"}
-		serverHeaderRoutingLabels = []string{"status_path", "common_name", "real_address", "virtual_address"}
-		serverHeaderRoutingLabelColumns = []string{"Common Name", "Real Address", "Virtual Address"}
-	}
+	var serverHeaderClientLabels = []string{"common_name", "real_address", "bytes_received", "bytes_sent", "connection_time"}
+	var serverHeaderClientLabelColumns = []string{"Common Name", "Real Address", "Bytes Received", "Bytes Sent", "Connected Since"}
+	var serverHeaderRoutingLabels = []string{"Virtual Address", "common_name", "real_address", "last_ref"}
+	var serverHeaderRoutingLabelColumns = []string{"Virtual Address", "Common Name", "Real Address", "Last Ref"}
 
 	openvpnServerHeaders := map[string]OpenvpnServerHeader{
 		"CLIENT_LIST": {
@@ -132,7 +113,7 @@ func NewOpenVPNExporter(statusPaths []string, ignoreIndividuals bool) (*OpenVPNE
 			LabelColumns: serverHeaderRoutingLabelColumns,
 			Metrics: []OpenvpnServerHeaderField{
 				{
-					Column: "Last Ref (time_t)",
+					Column: "Last Ref",
 					Desc: prometheus.NewDesc(
 						prometheus.BuildFQName("openvpn", "server", "route_last_reference_time_seconds"),
 						"Time at which a route was last referenced, in seconds.",
@@ -153,24 +134,11 @@ func NewOpenVPNExporter(statusPaths []string, ignoreIndividuals bool) (*OpenVPNE
 	}, nil
 }
 
-// Converts OpenVPN status information into Prometheus metrics. This
-// function automatically detects whether the file contains server or
-// client metrics. For server metrics, it also distinguishes between the
-// version 2 and 3 file formats.
 func (e *OpenVPNExporter) collectStatusFromReader(statusPath string, file io.Reader, ch chan<- prometheus.Metric) error {
 	reader := bufio.NewReader(file)
-	buf, _ := reader.Peek(18)
-	if bytes.HasPrefix(buf, []byte("TITLE,")) {
-		// Server statistics, using format version 2.
+	buf, _ := reader.Peek(16)
+	if bytes.HasPrefix(buf, []byte("OpenVPN CLIENT")) {
 		return e.collectServerStatusFromReader(statusPath, reader, ch, ",")
-	} else if bytes.HasPrefix(buf, []byte("TITLE\t")) {
-		// Server statistics, using format version 3. The only
-		// difference compared to version 2 is that it uses tabs
-		// instead of spaces.
-		return e.collectServerStatusFromReader(statusPath, reader, ch, "\t")
-	} else if bytes.HasPrefix(buf, []byte("OpenVPN STATISTICS")) {
-		// Client statistics.
-		return e.collectClientStatusFromReader(statusPath, reader, ch)
 	} else {
 		return fmt.Errorf("unexpected file contents: %q", buf)
 	}
@@ -192,12 +160,15 @@ func (e *OpenVPNExporter) collectServerStatusFromReader(statusPath string, file 
 			// Stats footer.
 		} else if fields[0] == "GLOBAL_STATS" {
 			// Global server statistics.
-		} else if fields[0] == "HEADER" && len(fields) > 2 {
-			// Column names for CLIENT_LIST and ROUTING_TABLE.
-			headersFound[fields[1]] = fields[2:]
-		} else if fields[0] == "TIME" && len(fields) == 3 {
+		} else if fields[0] == "Common Name" && len(fields) > 2 {
+			// Column names for CLIENT_LIST.
+			headersFound["CLIENT_LIST"] = fields[0:]
+		} else if fields[0] == "Virtual Address" && len(fields) > 2 {
+			// Column names for ROUTING_TABLE.
+			headersFound["ROUTING_TABLE"] = fields[0:]
+		} else if fields[0] == "Updated" && len(fields) == 2 {
 			// Time at which the statistics were updated.
-			timeStartStats, err := strconv.ParseFloat(fields[2], 64)
+			timeStartStats, err := strconv.ParseFloat(fields[1], 64)
 			if err != nil {
 				return err
 			}
@@ -206,12 +177,16 @@ func (e *OpenVPNExporter) collectServerStatusFromReader(statusPath string, file 
 				prometheus.GaugeValue,
 				timeStartStats,
 				statusPath)
-		} else if fields[0] == "TITLE" && len(fields) == 2 {
-			// OpenVPN version number.
+		} else if len(fields) == 5 && fields[0] != "Common Name" {
+			// Entry for CLIENT LIST.
+			parseClient(fields)
+			numberConnectedClient++
+
+		} else if len(fields) == 4 && fields[0] != "Virtual Address" {
+			// Entry for ROUTEING TABLE.
+			parseRoute(fields)
+
 		} else if header, ok := e.openvpnServerHeaders[fields[0]]; ok {
-			if fields[0] == "CLIENT_LIST" {
-				numberConnectedClient++
-			}
 			// Entry that depends on a preceding HEADERS directive.
 			columnNames, ok := headersFound[fields[0]]
 			if !ok {
@@ -239,7 +214,7 @@ func (e *OpenVPNExporter) collectServerStatusFromReader(statusPath string, file 
 			// Export relevant columns as individual metrics.
 			for _, metric := range header.Metrics {
 				if columnValue, ok := columnValues[metric.Column]; ok {
-					if l, _ := recordedMetrics[metric]; ! subslice(labels, l) {
+					if l, _ := recordedMetrics[metric]; !subslice(labels, l) {
 						value, err := strconv.ParseFloat(columnValue, 64)
 						if err != nil {
 							return err
@@ -280,9 +255,11 @@ func contains(s []string, e string) bool {
 
 // Is a sub-slice of slice
 func subslice(sub []string, main []string) bool {
-	if len(sub) > len(main) {return false}
+	if len(sub) > len(main) {
+		return false
+	}
 	for _, s := range sub {
-		if ! contains(main, s) {
+		if !contains(main, s) {
 			return false
 		}
 	}
@@ -361,3 +338,19 @@ func (e *OpenVPNExporter) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 }
+
+func parseClient(fields []string) {
+	cn := fields[0]
+	realAddr := fields[1]
+	bytesReceived := fields[2]
+	bytesSent := fields[3]
+	connectedSince := fields[4]
+}
+
+func parseRoute(fields []string) {
+	virtAddr := fields[0]
+	cn := fields[1]
+	realAddr := fields[2]
+	lastRef := fields[3]
+}
+*/
