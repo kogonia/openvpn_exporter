@@ -1,9 +1,9 @@
 OpenVPN CLIENT LIST
 Updated,2022-03-05 18:00:08
 Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since
-cn_1,192.168.0.1:62211,706821,10429471,2022-03-05 17:34:22
-cn_2,192.168.0.2:7609,70080,465065,2022-03-05 17:19:48
-cn_3,192.168.0.3:31681,901058,1453728,2022-03-05 14:51:18
+cn_1,192.168.0.1:62211,1,2,2022-03-05 17:34:22
+cn_2,192.168.0.2:7609,10,20,2022-03-05 17:19:48
+cn_3,192.168.0.3:31681,100,200,2022-03-05 14:51:18
 ROUTING TABLE
 Virtual Address,Common Name,Real Address,Last Ref
 172.21.110.42,cn_1,192.168.0.1:62211,2022-03-05 18:00:06
@@ -12,10 +12,3 @@ Virtual Address,Common Name,Real Address,Last Ref
 GLOBAL STATS
 Max bcast/mcast queue length,7
 END
-
-s := prometheus.NewMetricWithTimestamp(
-		timeReportedByExternalSystem,
-		prometheus.MustNewConstMetric(
-			desc, prometheus.GaugeValue, temperatureReportedByExternalSystem,
-		),
-	)

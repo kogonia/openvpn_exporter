@@ -2,63 +2,18 @@ package exporters
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
-type openVPN struct {
-	updated                     string
-	totalBytesIn, totalBytesOut int
-	clients                     map[string]client
-}
-
-type client struct {
-	comonName                string
-	virtAddr, realAddr       net.IP
-	connSince, lastRef       time.Time
-	bytesReceived, bytesSent int
-}
-
-var ov openVPN
-
-func (ov openVPN) bytes() []byte {
-	b := bytes.NewBuffer(make([]byte, 0, 64))
-	_ = json.NewEncoder(b).Encode(ov)
-	return b.Bytes()
-}
-
-func Process(filename string) {
-	ov.clients = make(map[string]client, 128)
-	parseStatusFile(filename)
-}
-
-func printer(ov openVPN) {
-	fmt.Printf("updated: %s\n", ov.updated)
-	fmt.Printf("totalBytesIn: %d\n", ov.totalBytesIn)
-	fmt.Printf("totalBytesOut: %d\n[\n", ov.totalBytesOut)
-	for _, cl := range ov.clients {
-		fmt.Printf("{\n\tcomonName:\t%s,\n\tvirtAddr:\t%s,\n\trealAddr:\t%s,\n\tconnSince:\t%s,\n\tlastRef:\t%s,\n\tbytesReceived:\t%d,\n\tbytesSent:\t%d\n},\n",
-			cl.comonName, cl.virtAddr, cl.realAddr, cl.connSince, cl.lastRef, cl.bytesReceived, cl.bytesSent)
-	}
-	fmt.Println("]")
-}
-
-func check(err error) {
+func parseStatusFile() error {
+	f, err := os.Open(ovpn.statusPath)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-}
-
-func parseStatusFile(fileName string) {
-	f, err := os.Open(fileName)
-	check(err)
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
@@ -66,24 +21,29 @@ func parseStatusFile(fileName string) {
 	for scanner.Scan() {
 		processRow(scanner.Text())
 	}
-	countTotalBytes()
-	printer(ov)
+	// countTotalBytes()
+
+	return nil
 }
 
 func processRow(row string) {
 	fields := strings.Split(row, ",")
 	switch len(fields) {
 	case 2:
-		if fields[0] == "Updated" {
-			ov.updated = fields[1]
+		if fields[0] == "updated" {
+			ovpn.updated = fields[1]
 		}
 
 	case 5:
 		if fields[0] == "Common Name" {
 			// client list header. Pass through
 		} else {
-			processClientListEntry(fields)
-		} // client list entry
+			// client list entry
+			err := processClientListEntry(fields)
+			if err != nil {
+				log.Println(err)
+			}
+		}
 
 	case 4:
 		if fields[0] == "Virtual Address" {
@@ -95,39 +55,40 @@ func processRow(row string) {
 	}
 }
 
-func processClientListEntry(fields []string) {
-	br, err := strconv.Atoi(fields[2])
-	check(err)
-	bs, err := strconv.Atoi(fields[3])
-	check(err)
+func processClientListEntry(fields []string) error {
+	br, err := strconv.ParseFloat(fields[2], 64)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	bs, err := strconv.ParseFloat(fields[3], 64)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
 
-	t, _ := time.Parse("2006-01-02 15:04:05", fields[4])
+	ovpn.totalBytesIn += br
+	ovpn.totalBytesOut += bs
+
+	// t, _ := time.Parse("2006-01-02 15:04:05", fields[4])
 	cl := client{
-		comonName:     fields[0],
+		commonName:    fields[0],
 		realAddr:      net.ParseIP(strings.Split(fields[1], ":")[0]),
-		connSince:     t,
+		connSince:     fields[4],
 		bytesReceived: br,
 		bytesSent:     bs,
 	}
-	ov.clients[cl.comonName] = cl
+	ovpn.clients[cl.commonName] = cl
+
+	return nil
 }
 
 func processRoutingTableEntry(fields []string) {
 	cn := fields[1]
-	if cl, ok := ov.clients[cn]; ok {
-		t, _ := time.Parse("2006-01-02 15:04:05", fields[3])
+	if cl, ok := ovpn.clients[cn]; ok {
+		// t, _ := time.Parse("2006-01-02 15:04:05", fields[3])
 		cl.virtAddr = net.ParseIP(strings.Split(fields[0], ":")[0])
-		cl.lastRef = t
-		ov.clients[cn] = cl
+		cl.lastRef = fields[3]
+		ovpn.clients[cn] = cl
 	}
-}
-
-func countTotalBytes() {
-	var in, out int
-	for _, cl := range ov.clients {
-		in += cl.bytesReceived
-		out += cl.bytesSent
-	}
-	ov.totalBytesIn = in
-	ov.totalBytesOut = out
 }
