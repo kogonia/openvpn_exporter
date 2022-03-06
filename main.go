@@ -12,7 +12,7 @@ import (
 
 func main() {
 	var (
-		listenAddress      = flag.String("port", ":9114", "port to listen.")
+		listenAddress      = flag.String("port", ":9119", "port to listen.")
 		metricsPath        = flag.String("path", "/metrics", "path under which to expose metrics.")
 		openvpnStatusPaths = flag.String("dir", "examples/example.openvpn-status.log", "paths at which openVPN places its status files.")
 	)
