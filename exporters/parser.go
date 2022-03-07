@@ -17,6 +17,7 @@ func parseStatusFile() error {
 	defer f.Close()
 
 	ovpn.clients = make(map[string]client, 128)
+	ovpn.totalBytesIn, ovpn.totalBytesOut = 0, 0
 
 	scanner := bufio.NewScanner(f)
 	scanner.Split(bufio.ScanLines)
