@@ -44,7 +44,7 @@ var (
 		"OpenVPNExporter's bytes sent summary.",
 		nil, nil)
 
-	clientLabels = []string{"common_name", "virt_addr", "real_addr", "conn_since", "bytes_received", "bytes_sent", "last_req"}
+	clientLabels = []string{"common_name", "virt_addr", "real_addr", "conn_since", "bytes_received", "bytes_sent", "last_ref"}
 	clDescr      = prometheus.NewDesc(
 		prometheus.BuildFQName("openvpn", "clients", "info"),
 		"Client's info.",
@@ -53,7 +53,7 @@ var (
 
 func NewOVPNExporter(path string) *OpenVPNExporter {
 	ovpn.statusPath = path
-	ovpn.clients = make(map[string]client, 128)
+	// ovpn.clients = make(map[string]client, 128)
 
 	return &ovpn
 }
